@@ -1,0 +1,93 @@
+name: Build and Deploy
+
+# Eventos que disparan el workflow
+on:
+  pull_request:
+    branches:
+      - master  # Solo ejecuta el workflow en pull requests hacia 'master'
+    types:
+      - closed  # Se dispara cuando un pull request se cierra (merged)
+
+jobs:
+  build-deploy:
+    # Asegura que el workflow solo corra si el pull request fue fusionado
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master' && github.event.pull_request.head.ref == 'UAT'
+    runs-on: ubuntu-latest
+
+    steps:
+      # Revisa el código del repositorio
+      - name: Check out code
+        uses: actions/checkout@v3
+
+      # Configura AWS CLI para autenticarte con ECR
+      - name: Configure AWS CLI
+        uses: aws-actions/configure-aws-credentials@v3
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      # Inicia sesión en Amazon ECR
+      - name: Login to Amazon ECR
+        run: |
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 490004627444.dkr.ecr.us-east-1.amazonaws.com
+
+      # Construye la imagen Docker
+      - name: Build Docker Image
+        run: |
+          docker build -t legalario-repo .
+
+      # Etiqueta y sube la imagen a ECR
+      - name: Push to Amazon ECR
+        run: |
+          docker tag legalario-repo:latest 490004627444.dkr.ecr.us-east-1.amazonaws.com/legalario-repo:latest
+          docker push 490004627444.dkr.ecr.us-east-1.amazonaws.com/legalario-repo:latest
+
+      # Crear un AppSpec.json para CodeDeploy
+      - name: Create AppSpec.json
+        run: |
+          echo '{
+            "version": 0.0,
+            "Resources": [
+              {
+                "TargetService": {
+                  "Type": "AWS::ECS::Service",
+                  "Properties": {
+                    "TaskDefinition": "arn:aws:ecs:us-east-1:490004627444:task-definition/LegaLarioTask:1",
+                    "LoadBalancerInfo": {
+                      "ContainerName": "LegaLarioContainer",
+                      "ContainerPort": 80
+                    },
+                    "PlatformVersion": "LATEST",
+                    "NetworkConfiguration": {
+                      "AwsvpcConfiguration": {
+                        "Subnets": [
+                          "subnet-075c482c9cc7aaf02",
+                          "subnet-03bfc5943022afdd0",
+                          "subnet-020a76d904ed38354"
+                        ],
+                        "SecurityGroups": [
+                          "sg-06eb2c15bf7e4931b"
+                        ],
+                        "AssignPublicIp": "ENABLED"
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          }' > appspec.json
+
+      # Subir AppSpec.json al S3 Bucket
+      - name: Upload AppSpec to S3
+        run: |
+          aws s3 cp appspec.json s3://legalario-appspec-bucket/appspec.json
+
+      # Desencadenar despliegue en CodeDeploy
+      - name: Trigger CodeDeploy Deployment
+        run: |
+          aws deploy create-deployment \
+            --application-name AppECS-LegaLarioCluster-LegaLarioService \
+            --deployment-group-name DgpECS-LegaLarioCluster-LegaLarioService \
+            --deployment-config-name CodeDeployDefault.ECSAllAtOnce \
+            --s3-location bucket=legalario-appspec-bucket,key=appspec.json,bundleType=json
