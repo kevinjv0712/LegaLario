@@ -1,13 +1,17 @@
 name: Build and Deploy
 
+# Eventos que disparan el workflow
 on:
-  push:
+  pull_request:
     branches:
-      - UAT
-      - master
+      - master  # Solo ejecuta el workflow en pull requests hacia 'master'
+    types:
+      - closed  # Se dispara cuando un pull request se cierra (merged)
 
 jobs:
   build-deploy:
+    # Asegura que el workflow solo corra si el pull request fue fusionado
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master' && github.event.pull_request.head.ref == 'UAT'
     runs-on: ubuntu-latest
 
     steps:
@@ -49,7 +53,7 @@ jobs:
                 "TargetService": {
                   "Type": "AWS::ECS::Service",
                   "Properties": {
-                    "TaskDefinition": "arn:aws:ecs:us-east-1:490004627444:task-definition/LegaLarioTask:3",
+                    "TaskDefinition": "arn:aws:ecs:us-east-1:490004627444:task-definition/LegaLarioTask:1",
                     "LoadBalancerInfo": {
                       "ContainerName": "LegaLarioContainer",
                       "ContainerPort": 80
